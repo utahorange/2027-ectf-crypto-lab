@@ -21,6 +21,7 @@ msg = {
          "version": 1,
          "code": "LEGITIMATE FLIGHT SOFTWARE",
     },
+    "signature": "<bytes>"
 }
 ground.send(msg)
 ```

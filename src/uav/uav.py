@@ -13,6 +13,7 @@ PORT = 9000
 #         "version": 1,
 #         "code": "LEGITIMATE FLIGHT SOFTWARE",
 #     },
+#     "signature": "<bytes>"
 # }
 
 class UAV:
@@ -54,8 +55,7 @@ class UAV:
         signature = message.get("signature")
 
         if not self.security.verify_firmware(
-            firmware,
-            signature,
+            firmware, 
         ):
             print("[UAV] Firmware rejected")
             return
@@ -79,28 +79,22 @@ class UAV:
 
         self.execute_command(command)
 
+    def run(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((HOST, PORT))
 
-def main():
-    uav = UAV()
+        print(f"[UAV] Listening on {HOST}:{PORT}")
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((HOST, PORT))
+        while True:
+            data, address = sock.recvfrom(65535)
 
-    print(f"[UAV] Listening on {HOST}:{PORT}")
+            try:
+                message = decode_message(data)
 
-    while True:
-        data, address = sock.recvfrom(65535)
+                print(f"[UAV] Received from {address}: {message}")
 
-        try:
-            message = decode_message(data)
+                self.handle_message(message)
 
-            print(f"[UAV] Received from {address}: {message}")
+            except Exception as e:
+                print(f"[UAV] Invalid packet: {e}")
 
-            uav.handle_message(message)
-
-        except Exception as e:
-            print(f"[UAV] Invalid packet: {e}")
-
-
-if __name__ == "__main__":
-    main()

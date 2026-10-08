@@ -1,7 +1,7 @@
 class Security:
-    def verify_firmware(self, firmware, signature):
+    def verify_firmware(self, firmware):
         # TODO: Implement firmware authentication
-
+        
         return True
 
     def verify_command(self, command, signature):
