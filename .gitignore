@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache
+.ruff_cache
 
 # Virtual environments
 .venv
@@ -12,3 +14,5 @@ wheels/
 # Keys
 keys/
 *.pem
+
+solutions/

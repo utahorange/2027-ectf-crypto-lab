@@ -13,11 +13,16 @@ PORT = 9000
 #         "version": 1,
 #         "code": "LEGITIMATE FLIGHT SOFTWARE",
 #     },
-#     "signature": "<bytes>"
+#     "signature": "<hex>"
 # }
 
 class UAV:
-    def __init__(self):
+    def __init__(self, part=1):
+        # Which lab part is active: 1 = hash, 2 = signature, 3 = signature + anti-replay
+        if part not in (1, 2, 3):
+            raise ValueError(f"part must be 1, 2, or 3, got {part}")
+
+        self.part = part
         self.security = Security()
 
         self.current_firmware = {
@@ -52,11 +57,13 @@ class UAV:
 
     def handle_update(self, message):
         firmware = message["firmware"]
-        signature = message.get("signature")
 
-        if not self.security.verify_firmware(
-            firmware, 
-        ):
+        if self.part == 1:
+            verified = self.security.verify_firmware_hash(message)
+        else:
+            verified = self.security.verify_firmware_signature(message)
+
+        if not verified:
             print("[UAV] Firmware rejected")
             return
 
@@ -66,12 +73,8 @@ class UAV:
 
     def handle_command(self, message):
         command = message["command"]
-        signature = message.get("signature")
 
-        if not self.security.verify_command(
-            command,
-            signature,
-        ):
+        if not self.security.verify_command(message):
             print("[UAV] Command rejected")
             return
 
@@ -83,7 +86,7 @@ class UAV:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.bind((HOST, PORT))
 
-        print(f"[UAV] Listening on {HOST}:{PORT}")
+        print(f"[UAV] Part {self.part} | Listening on {HOST}:{PORT}")
 
         while True:
             data, address = sock.recvfrom(65535)
@@ -98,3 +101,18 @@ class UAV:
             except Exception as e:
                 print(f"[UAV] Invalid packet: {e}")
 
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the UAV")
+    parser.add_argument(
+        "--part",
+        type=int,
+        choices=[1, 2, 3],
+        default=1,
+        help="lab part to run (1 = hash, 2 = signature, 3 = anti-replay)",
+    )
+    args = parser.parse_args()
+
+    UAV(part=args.part).run()
