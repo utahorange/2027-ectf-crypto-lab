@@ -87,15 +87,3 @@ def replay(captured):
     print(f"[ATTACKER] Replayed: {message}")
 
     return message
-
-
-def send_command(name, sequence):
-    command = {
-        "name": name,
-        "sequence": sequence,
-    }
-
-    send({
-        "type": "COMMAND",
-        "command": command,
-    })

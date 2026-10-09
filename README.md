@@ -1,13 +1,40 @@
 # 2027 eCTF Cryptography Lab
 This is a small cryptography lab to practice thinking about the 2027 eCTF scenario and how we would design a system to be robust against cryptographic attacks. In the actual eCTF competition, the UAV and ground server will most likely be separate boards. 
 
-When you start the scenario, the UAV will be continually running listening for commands. You will utilize the ground server to send legitimate commands, while using the attacker server to send malicious ones.
+When you start the scenario, the UAV runs continuously, listening for firmware updates. You will use the ground server to send legitimate updates, and the attacker to send malicious ones.
+
+## Requirements
+- [uv](https://docs.astral.sh/uv/) (it installs Python and the dependencies for you on the first `uv run`)
+- [Wireshark](https://www.wireshark.org/) (only needed for Part 2b)
+
+## Scenario
+
+From the eCTF website: “In the 2027 eCTF, teams will design and implement a secure bootloader for an unmanned aerial vehicle (UAV). The system must allow users to securely update and boot custom applications without compromising system integrity or leaking sensitive intellectual property.”
+
+This lab replicates that setup on your own machine. The UAV, the ground server, and the attacker all talk to each other over UDP on `127.0.0.1:9000`:
+
+| Role | File | How you run it |
+|------|------|----------------|
+| UAV | [`src/uav/uav.py`](src/uav/uav.py) | `uv run python -m uav.uav --part N` (leave it running) |
+| Ground server | [`src/ground/ground.py`](src/ground/ground.py) | `import ground` in a Python console |
+| Attacker | [`src/attacker.py`](src/attacker.py) | `import attacker` in a Python console |
+
+All of these are run from the `src` folder. For example, the ground server looks like this:
+```
+cd src
+uv run python
+>>> import ground
+>>> ground.update_firmware(2, "LEGITIMATE FLIGHT SOFTWARE")
+```
+
+The only file you need to edit is [`src/uav/security.py`](src/uav/security.py).
 
 ## Checking your work
 Each part has a set of tests. Run them from the repo root (the folder containing `pyproject.toml`), not from `src`:
 ```
 uv run pytest tests/test_part1.py
 uv run pytest tests/test_part2.py
+uv run pytest tests/test_part3.py
 ```
 
 Before you write any code, most tests will fail. That's expected: the UAV starts out accepting everything. Your goal is to get every test in a part passing.
@@ -45,22 +72,24 @@ Each helper prints the message it sent and returns it. The message looks like th
         "version": 2,
         "code": "LEGITIMATE FLIGHT SOFTWARE",
     },
-    "signature": "blank for now"
+    "signature": "<blank for now>"
 }
 ```
 
-At this point in time, there is no security implemented on the UAV, so it installs v2 even though nothing proves the update is genuine. 
+At this point, there is no security implemented on the UAV, so it installs v2 even though nothing proves the update is genuine. The message could have been modified in transit, and the UAV would still accept it. For message integrity, the UAV should only accept messages whose `"signature"` field holds a valid hash digest.
 
-We want to now make it so that only payloads with correct hashes are accepted, so that an attacker may not arbitrarily modify bytes in the update payload. Implement SHA256 hashing of the message (Message format says signature, but use hash for now).
-
-The ground server computes the hash like this:
+The ground server computes the hash like this (see `update_firmware_with_hash()` in [`ground.py`](src/ground/ground.py)):
 1. Build the message *without* the `"signature"` field.
 2. Turn it into bytes with `encode_message()` from [`protocol.py`](src/common/protocol.py).
 3. Take the SHA256 hex digest of those bytes and add it as `"signature"`, the last field.
 
-To verify, the UAV must hash exactly the same bytes: remove `"signature"` from a copy of the message and encode it with `encode_message()`. Don't use `json.dumps()` directly. It adds spaces, so the bytes (and the hash) won't match.
-
-> **IMPORTANT NOTE**: You should only need to modify `verify_firmware_hash()` in [`security.py`](src/uav/security.py).
+Implement **SHA256** hash verification in `verify_firmware_hash()` in [`security.py`](src/uav/security.py):
+- Get the received hash with `message.get("signature")`.
+- Hash only the `"type"` and `"firmware"` fields, not the signature itself. The provided helper `unsigned_bytes(message)` gives you exactly the bytes the ground server hashed.
+- Compute the expected digest with `hashlib.sha256(...).hexdigest()`.
+- Compare the two with `hmac.compare_digest()` rather than `==`, so the comparison takes the same time whether or not the hashes match (this avoids timing attacks).
+- The field is called `"signature"`, but in this part it only holds a hash. Real signatures come in Part 2a.
+- You only need to modify `verify_firmware_hash()`.
 
 When you're done, restart the UAV (stop it with Ctrl+C and run it again) so it picks up your changes. Then try both kinds of update from the ground console:
 ```python
@@ -71,9 +100,9 @@ ground.update_firmware_with_hash(3, "LEGITIMATE FLIGHT SOFTWARE")  # correct has
 Check your work with `uv run pytest tests/test_part1.py` from the repo root.
 
 ## Part 2a: Authenticity with Signatures
-A hash needs no secret: anyone, including an attacker, can compute a valid hash for their own firmware, and the Part 1 UAV accepts it. This is problematic, we only want to accept updates from the ground server, not the attacker! We will use Ed25519 signatures to authenticate. We need a private-public keypair for the ground server and UAV. 
- 
-Let's first create this keypair. Run `uv run python generate_keys.py`. This will generate:
+A hash needs no secret: anyone, including an attacker, can compute a valid hash for their own firmware, and the Part 1 UAV accepts it (that's what `test_attacker_who_recomputes_hash_is_accepted` shows). This is a problem: we only want to accept updates from the ground server, not the attacker! We will use Ed25519 signatures for authentication. The ground server signs with a private key that only it knows, and the UAV verifies with the matching public key.
+
+Let's first create this keypair. From the `src` folder, run `uv run python generate_keys.py`. This will generate (at the repo root):
 ```
 keys/
 ├── ground_private.pem
@@ -89,9 +118,16 @@ The public key is distributed to the UAV:
 ground_public.pem
 ```
 
-The functions to load these keys on the ground and UAV side have been written and are in [`protocol.py`](src/common/protocol.py). Modify `verify_firmware_signature()` in `security.py` to now accept this signed integrity check (Use `load_public_key()`).
+The functions to load these keys on the ground and UAV side have been written and are in [`protocol.py`](src/common/protocol.py).
 
-The ground server signs the same bytes you hashed in Part 1: the message without `"signature"`, encoded with `encode_message()`. The `"signature"` field now holds the Ed25519 signature as hex, so convert it back to bytes before verifying.
+The ground server signs the same bytes you hashed in Part 1 (the message without `"signature"`, encoded with `encode_message()`), then stores the signature as a hex string in `"signature"`.
+
+Implement **Ed25519 signature** verification in `verify_firmware_signature()` in [`security.py`](src/uav/security.py):
+- Get the signature with `message.get("signature")`. It arrives as a hex string, but `verify()` expects bytes, so convert it with `bytes.fromhex()`.
+- Get the signed data with `unsigned_bytes(message)`, just like in Part 1.
+- Use `load_public_key()` to load the ground server's public key from `keys/ground_public.pem`.
+- Call `public_key.verify(signature, data)`. Note that it doesn't return `True`/`False`: it returns `None` on success and raises `InvalidSignature` on failure. Catch `InvalidSignature` and return `False`. See the [`cryptography` Ed25519 docs](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed25519/).
+- You only need to modify `verify_firmware_signature()`.
 
 Restart the UAV in Part 2 mode so it checks signatures instead of hashes:
 ```
@@ -152,19 +188,44 @@ attacker.replay(captured.replace('"version":5', '"version":7'))
 ```
 This time the UAV rejects it. The signature still protects the *contents* of the message; it just can't tell an old message from a new one.
 
-Here, we ran a replay attack, where we replayed a valid update that we saw from the ground server. If we don't protect against this attack, an attacker can downgrade our firmware, or even command the UAV to do arbitrary things if the ground server has sent that command before.
+Here, we ran a replay attack, where we replayed a valid update that we saw from the ground server. If we don't protect against this attack, an attacker can roll our firmware back to any older version the ground server ever signed, including one with a known vulnerability. On a real UAV, the same trick would work on any signed command the ground server has sent before.
 
 The test `test_replayed_update_is_accepted` in [`tests/test_part2.py`](tests/test_part2.py) runs this same attack, so it should pass.
 
-## Part 3: Anti-Replay (optional)
-We need to have the UAV understand how "fresh" a command is and know if it sees a stale command. One classic and easy way to do this is to have a monotonically increasing counter (nonce). The UAV can remember the newest command it has accepted, and thus reject any that are old.
+## Part 3: Anti-Replay
+The signature proves *who* sent an update, but not *when*. To stop replays, the UAV needs to know how "fresh" an update is so it can spot a stale one. One classic and simple way to do this is a monotonically increasing counter. Firmware updates already carry one: the `version` field. The UAV remembers the newest version it has accepted and rejects anything that isn't newer.
+
+This works only because `version` is covered by the signature. If the attacker bumps the version of a captured update (like the `"version":7` trick in Part 2b), the signature no longer matches and the update is rejected before the counter is even checked.
+
+In Part 3 mode, the UAV runs your Part 2a signature check first and then calls `verify_firmware_counter()`. An update installs only if both return `True`.
+
+Implement the anti-rollback check in `verify_firmware_counter()` in [`security.py`](src/uav/security.py):
+- `self.highest_version` (set in `__init__`) holds the newest version accepted so far. It starts at `1`, the version the UAV ships with.
+- Read the incoming version from `message["firmware"]["version"]`.
+- Reject it unless it is **strictly** newer than `self.highest_version`. Replaying the currently installed version should fail too.
+- If you accept it, update `self.highest_version` before returning `True`.
+- You only need to modify `verify_firmware_counter()`. Your Part 2a signature check must already work.
 
 Restart the UAV in Part 3 mode:
 ```
 uv run python -m uav.uav --part 3
 ```
 
-> **IMPORTANT NOTE**: You should only need to modify `verify_command()` in [`security.py`](src/uav/security.py).
+Then repeat the Part 2b attack with the UAV, ground, and attacker consoles. Capture the v5 packet in Wireshark exactly as in Part 2b, and save it as `captured` in the attacker console:
+```python
+ground.update_firmware_signed(5, "LEGITIMATE FLIGHT SOFTWARE")  # capture this one in Wireshark
+ground.update_firmware_signed(6, "LEGITIMATE FLIGHT SOFTWARE")  # accepted: 6 > 5
+attacker.replay(captured)                                      # v5 again: should be rejected now
+```
+
+The UAV prints `Firmware rejected` and stays on v6. Your Part 2a signature check still runs too, so `attacker.update_firmware_signed(99, ...)` is rejected even though 99 is newer.
+
+Check your work with `uv run pytest tests/test_part3.py` from the repo root. The Part 2 test `test_replayed_update_is_accepted` still passes, because it runs the UAV in Part 2 mode, which has no counter.
+
+Things to think about:
+- Restarting the UAV resets `highest_version` to 1, so an old update becomes valid again. On a real device, where would the counter need to live so it survives a reboot?
+- What happens if the ground server ever signs a huge version number by mistake (say `2**31`)?
+- A counter needs the receiver to remember state. What alternatives (timestamps, challenge-response nonces) avoid that, and what do they need instead?
 
 # Additional Reading/Tips and Tricks
 Some useful concepts to review:
@@ -174,7 +235,7 @@ Some useful concepts to review:
 - Ed25519 (the signature scheme we like to use)
 - Replay attacks
 - Nonces
-- Sequence numbers
+- Sequence numbers and monotonic counters
 - Firmware rollback attacks
 - Secure boot
 - Root of trust

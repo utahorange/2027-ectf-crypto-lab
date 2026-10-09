@@ -68,15 +68,3 @@ def update_firmware_signed(version, code):
     print(f"[GROUND] Sent: {message}")
 
     return message
-
-
-def send_command(name, sequence):
-    command = {
-        "name": name,
-        "sequence": sequence,
-    }
-
-    send({
-        "type": "COMMAND",
-        "command": command,
-    })

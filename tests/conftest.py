@@ -84,3 +84,8 @@ def uav_part1():
 def uav_part2(ground_key):
     # Depends on ground_key so the key files exist before the UAV is created.
     return UAV(part=2)
+
+
+@pytest.fixture
+def uav_part3(ground_key):
+    return UAV(part=3)

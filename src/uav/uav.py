@@ -30,27 +30,16 @@ class UAV:
             "code": "LEGITIMATE FLIGHT SOFTWARE",
         }
 
-        self.last_command_sequence = 0
-
     def install_firmware(self, firmware):
         print(f"[UAV] Installing firmware v{firmware['version']}")
 
         self.current_firmware = firmware
-
-    def execute_command(self, command):
-        print(
-            f"[UAV] Executing command: "
-            f"{command['name']}"
-        )
 
     def handle_message(self, message):
         msg_type = message["type"]
 
         if msg_type == "UPDATE":
             self.handle_update(message)
-
-        elif msg_type == "COMMAND":
-            self.handle_command(message)
 
         else:
             print("[UAV] Unknown message")
@@ -60,8 +49,14 @@ class UAV:
 
         if self.part == 1:
             verified = self.security.verify_firmware_hash(message)
-        else:
+        elif self.part == 2:
             verified = self.security.verify_firmware_signature(message)
+        else:
+            # Check the signature first: the version only means something
+            # once we know the ground server signed it.
+            verified = self.security.verify_firmware_signature(
+                message
+            ) and self.security.verify_firmware_counter(message)
 
         if not verified:
             print("[UAV] Firmware rejected")
@@ -70,17 +65,6 @@ class UAV:
         print("[UAV] Firmware authenticated")
 
         self.install_firmware(firmware)
-
-    def handle_command(self, message):
-        command = message["command"]
-
-        if not self.security.verify_command(message):
-            print("[UAV] Command rejected")
-            return
-
-        print("[UAV] Command authenticated")
-
-        self.execute_command(command)
 
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

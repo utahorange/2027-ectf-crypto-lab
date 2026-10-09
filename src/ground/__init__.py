@@ -1,6 +1,5 @@
 from ground.ground import (
     send,
-    send_command,
     update_firmware,
     update_firmware_signed,
     update_firmware_with_hash,
@@ -8,7 +7,6 @@ from ground.ground import (
 
 __all__ = [
     "send",
-    "send_command",
     "update_firmware",
     "update_firmware_signed",
     "update_firmware_with_hash",
