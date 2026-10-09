@@ -24,6 +24,10 @@ class Security:
     def verify_firmware_hash(self, message):
         # TODO: Implement SHA256 hash verification
         # Use hmac for constant-time comparison of the hash
+        # 1. Extract signature from message using get()
+        # 2. Extract unsigned bytes from message using unsigned_bytes()
+        # 3. Use hashlib.sha256() and hexdigest() to hash the unsigned bytes
+        # 4. Use hmac.compare_digest() to compare 
 
         return True
 
