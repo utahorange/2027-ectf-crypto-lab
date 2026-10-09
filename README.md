@@ -112,14 +112,49 @@ Check your work with `uv run pytest tests/test_part2.py` from the repo root.
 ### Part 2b: Attack
 Hmmm, is there anything the attacker can do now? Now that the UAV knows if the update came from the ground server, there must be nothing the attacker can do, right?...
 
+You'll need three terminals, all in the `src` folder: the UAV, the ground console, and an attacker console. Your signature check from Part 2a must be working, and the UAV must be running with `--part 2`.
+
+Start the attacker console the same way as the ground console:
+```
+cd src
+uv run python
+```
+```python
+import json
+import attacker
+```
+
+[`attacker.py`](src/attacker.py) has the same helpers as the ground server. The difference is the key: the attacker doesn't have `ground_private.pem`, so `attacker.update_firmware_signed()` signs with a brand-new key of its own. Try forging an update:
+```python
+attacker.update_firmware_signed(5, "MALICIOUS FLIGHT SOFTWARE")
+```
+The UAV rejects it, because the signature doesn't match the ground server's public key. So far, so good.
+
 What if the attacker can "sniff the lines" and see the communication between the ground server and UAV? (like Eve in the classic Alice and Bob scenario). Then, the attacker can execute what is known as a replay attack. Let's try this now!
 
-1. Record a valid UDP message from the ground server with Wireshark (listen on loopback).
-2. Copy the plaintext into `attacker.py`.
-3. Start the scenario and send the command to the UAV from `attacker.py`.
-4. See that the UAV accepts the update. Yikes.
+1. Open Wireshark and start capturing on the loopback interface (`Loopback: lo0` on macOS, `Loopback` or `lo` on Windows/Linux). Type `udp.port == 9000` in the filter bar and press Enter, so you only see UAV traffic.
+2. From the ground console, send a signed update:
+   ```python
+   ground.update_firmware_signed(5, "LEGITIMATE FLIGHT SOFTWARE")
+   ```
+   One packet appears in Wireshark.
+3. Click the packet. In the details pane, right-click the **Data** line and choose **Copy → …as Printable Text**. You should get JSON starting with `{"type":"UPDATE"`.
+4. Back in the ground console, send a newer update. The UAV installs v6:
+   ```python
+   ground.update_firmware_signed(6, "LEGITIMATE FLIGHT SOFTWARE")
+   ```
+5. In the attacker console, paste the captured JSON between the single quotes and send it:
+   ```python
+   captured = '{"type":"UPDATE","firmware":{"version":5, ...},"signature":"..."}'
+   attacker.send(json.loads(captured))
+   ```
+6. Watch the UAV: it prints `Firmware authenticated` and installs **v5** again. The attacker just rolled your firmware back to an older version without knowing the private key. Yikes.
 
-Here, we ran a replay attack, where we replayed a valid command that we saw from the ground server. If we don't protect against this attack, an attacker can downgrade our firmware or even command it to do arbitrary things if the ground server has sent that command before.
+**Try this too:** change `"version":5` to `"version":7` in `captured` and send it again. This time the UAV rejects it. The signature still protects the *contents* of the message; it just can't tell an old message from a new one.
+
+Here, we ran a replay attack, where we replayed a valid update that we saw from the ground server. If we don't protect against this attack, an attacker can downgrade our firmware, or even command the UAV to do arbitrary things if the ground server has sent that command before.
+
+The test `test_replayed_update_is_accepted` in [`tests/test_part2.py`](tests/test_part2.py) runs this same attack, so it should pass.
 
 ## Part 3: Freshness/Anti-Replay
 We need to have the UAV understand how "fresh" a command is and know if it sees a stale command. One classic and easy way to do this is to have a monotonically increasing counter (nonce). The UAV can remember the newest command it has accepted, and thus reject any that are old.
