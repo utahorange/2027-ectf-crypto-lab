@@ -1,4 +1,14 @@
+# The attacker in this lab can:
+#   - send any message to the UAV (it's on the same network)
+#   - see every message the ground server sends (Part 2b: Wireshark)
+# The attacker can NOT:
+#   - read keys/ground_private.pem
+#
+# The helpers below match the ground server's, so you can compare: same call,
+# different key, different result.
+
 import hashlib
+import json
 import socket
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -35,31 +45,46 @@ def update_firmware(version, code):
     message = update_message(version, code)
 
     send(message)
-    print(f"[GROUND] Sent: {message}")
+    print(f"[ATTACKER] Sent: {message}")
 
     return message
 
 
 def update_firmware_with_hash(version, code):
-    # Part 1: "signature" holds the SHA256 hex digest of the encoded message.
+    # Part 1 attack: a SHA256 hash needs no secret, so the attacker can
+    # compute a valid one for any firmware. The Part 1 UAV accepts this.
     message = update_message(version, code)
     message["signature"] = hashlib.sha256(encode_message(message)).hexdigest()
 
     send(message)
-    print(f"[GROUND] Sent: {message}")
+    print(f"[ATTACKER] Sent: {message}")
 
     return message
 
 
 def update_firmware_signed(version, code):
-    # Part 2: sign with an attacker-generated Ed25519 key, not the ground key.
+    # Part 2: the attacker doesn't have the ground private key, so it signs
+    # with a brand-new key of its own. The signature is well-formed but won't
+    # verify against ground_public.pem, so the Part 2 UAV rejects this.
     private_key = Ed25519PrivateKey.generate()
 
     message = update_message(version, code)
     message["signature"] = private_key.sign(encode_message(message)).hex()
 
     send(message)
-    print(f"[GROUND] Sent: {message}")
+    print(f"[ATTACKER] Sent: {message}")
+
+    return message
+
+
+def replay(captured):
+    # Part 2b attack: send a captured packet again, unchanged. The attacker
+    # didn't sign it, but the ground server did, so it still verifies.
+    # `captured` is the JSON text copied from Wireshark.
+    message = json.loads(captured)
+
+    send(message)
+    print(f"[ATTACKER] Replayed: {message}")
 
     return message
 

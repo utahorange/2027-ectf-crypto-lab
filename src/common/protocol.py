@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+
 def encode_message(message: dict) -> bytes:
     return json.dumps(message, separators=(",", ":")).encode()
 

@@ -5,6 +5,7 @@ from cryptography.exceptions import InvalidSignature
 
 from common.protocol import encode_message, load_public_key
 
+
 # Helper function to extract the unsigned bytes of a message
 def unsigned_bytes(message):
     unsigned = dict(message)
