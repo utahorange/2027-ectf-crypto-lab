@@ -5,7 +5,7 @@ When you start the scenario, the UAV runs continuously, listening for firmware u
 
 ## Requirements
 - [uv](https://docs.astral.sh/uv/) (it installs Python and the dependencies for you on the first `uv run`)
-- [Wireshark](https://www.wireshark.org/) (only needed for Part 2b)
+- [Wireshark](https://www.wireshark.org/) (only needed for Parts 2b and 4)
 
 ## Scenario
 
@@ -35,6 +35,7 @@ Each part has a set of tests. Run them from the repo root (the folder containing
 uv run pytest tests/test_part1.py
 uv run pytest tests/test_part2.py
 uv run pytest tests/test_part3.py
+uv run pytest tests/test_part4.py
 ```
 
 Before you write any code, most tests will fail. That's expected: the UAV starts out accepting everything. Your goal is to get every test in a part passing.
@@ -105,9 +106,12 @@ A hash needs no secret: anyone, including an attacker, can compute a valid hash 
 Let's first create this keypair. From the `src` folder, run `uv run python generate_keys.py`. This will generate (at the repo root):
 ```
 keys/
+├── firmware.key
 ├── ground_private.pem
 └── ground_public.pem
 ```
+
+(`firmware.key` is for Part 4; ignore it for now.)
 
 The private key belongs to the ground server:
 ```
@@ -227,15 +231,69 @@ Things to think about:
 - What happens if the ground server ever signs a huge version number by mistake (say `2**31`)?
 - A counter needs the receiver to remember state. What alternatives (timestamps, challenge-response nonces) avoid that, and what do they need instead?
 
-# Additional Reading/Tips and Tricks
-Some useful concepts to review:
-- Cryptographic hash
-- Digital signatures
-- Public-key cryptography
-- Ed25519 (the signature scheme we like to use)
-- Replay attacks
-- Nonces
-- Sequence numbers and monotonic counters
-- Firmware rollback attacks
-- Secure boot
-- Root of trust
+## Part 4: Confidentiality with AEAD
+So far, everything we've added protects *integrity* and *authenticity*. Go back to Wireshark and look at any update packet: the firmware `code` is sitting there in plaintext. The eCTF scenario asks us to update the UAV "without leaking sensitive intellectual property", so anyone sniffing the link shouldn't be able to read the firmware.
+
+We'll encrypt the code with **ChaCha20-Poly1305**, an AEAD cipher (Authenticated Encryption with Associated Data). It does two jobs at once:
+- **Encryption:** ChaCha20 turns the code into ciphertext that only someone with the key can read.
+- **Authentication:** Poly1305 adds a 16-byte tag. If even one bit of the ciphertext changes, decryption fails instead of returning garbage.
+- **Associated data (AD):** extra bytes that are authenticated by the tag but *not* encrypted. We use the firmware version, so it stays readable (the UAV needs it for the Part 3 counter) but a ciphertext can't be moved into a message with a different version.
+
+Unlike Ed25519, ChaCha20-Poly1305 is *symmetric*: the ground server and the UAV share the same secret key. `generate_keys.py` already created it in Part 2a:
+```
+keys/
+├── firmware.key        # shared by the ground server and the UAV
+├── ground_private.pem
+└── ground_public.pem
+```
+If you don't have `keys/firmware.key`, run `uv run python generate_keys.py` again from the `src` folder. This also makes a new Ed25519 key pair, so restart the UAV afterwards.
+
+The ground server builds an encrypted update like this (see `update_firmware_encrypted()` in [`ground.py`](src/ground/ground.py)):
+1. Pick a random 12-byte nonce. A nonce must **never** be reused with the same key.
+2. Encrypt the code: `ChaCha20Poly1305(key).encrypt(nonce, code.encode(), str(version).encode())`. The last argument is the associated data.
+3. Put the nonce and ciphertext (with the tag on the end) in `"firmware"` as hex, then sign the whole message as in Part 2a.
+
+An encrypted update looks like this:
+```python
+{
+    "type": "UPDATE",
+    "firmware": {
+        "version": 7,
+        "nonce": "<12 bytes as hex>",
+        "code": "<ciphertext + tag as hex>",
+    },
+    "signature": "<hex>"
+}
+```
+
+In Part 4 mode, the UAV checks your Part 2a signature first, then calls `decrypt_firmware()`, then your Part 3 counter. It installs the decrypted code only if all three succeed.
+
+Implement **ChaCha20-Poly1305** decryption in `decrypt_firmware()` in [`security.py`](src/uav/security.py):
+- Get the nonce and ciphertext from `message["firmware"]["nonce"]` and `message["firmware"]["code"]`, and convert both from hex with `bytes.fromhex()`.
+- Use `load_firmware_key()` to load the shared key from `keys/firmware.key`.
+- Call `ChaCha20Poly1305(key).decrypt(nonce, ciphertext, associated_data)`, where the associated data is the version, exactly as the ground server encoded it: `str(version).encode()`. See the [`cryptography` AEAD docs](https://cryptography.io/en/latest/hazmat/primitives/aead/#cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305).
+- Like `verify()`, `decrypt()` raises on failure instead of returning `False`: it raises `InvalidTag`. Catch it and return `None`.
+- On success, return the code as a string with `.decode()`.
+- You only need to modify `decrypt_firmware()`. Your Part 2a and Part 3 checks must already work.
+
+Restart the UAV in Part 4 mode:
+```
+uv run python -m uav.uav --part 4
+```
+
+With Wireshark capturing as in Part 2b, compare the two kinds of signed update from the ground console:
+```python
+ground.update_firmware_signed(7, "LEGITIMATE FLIGHT SOFTWARE")     # plaintext: readable in Wireshark, rejected by the UAV
+ground.update_firmware_encrypted(7, "LEGITIMATE FLIGHT SOFTWARE")  # encrypted: unreadable in Wireshark, installed by the UAV
+```
+The UAV rejects the plaintext update, then prints `Installing firmware v7` for the encrypted one. In Wireshark, the `"code"` field of the encrypted update is now just hex.
+
+The attacker has neither key, so `attacker.update_firmware_encrypted(8, "MALICIOUS FLIGHT SOFTWARE")` is rejected. Replaying a captured encrypted update still fails because of your Part 3 counter: encryption hides the firmware, but it doesn't stop replays on its own.
+
+Check your work with `uv run pytest tests/test_part4.py` from the repo root.
+
+Things to think about:
+- The whole message is signed *and* the ciphertext has a Poly1305 tag. If the signature already protects integrity, what does the tag add? (Hint: who else holds `firmware.key`?)
+- What goes wrong if the ground server reuses a nonce for two different firmware images under the same key?
+- Every UAV in a fleet shares one `firmware.key`. What happens if an attacker pulls it out of a single captured UAV? How could you limit the damage?
+- The version and the length of the firmware are still visible. Could that leak anything useful to an attacker?

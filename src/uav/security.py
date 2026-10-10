@@ -1,9 +1,10 @@
 import hashlib
 import hmac
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-from common.protocol import encode_message, load_public_key
+from common.protocol import encode_message, load_firmware_key, load_public_key
 
 # Helper function to extract the unsigned bytes of a message
 def unsigned_bytes(message):
@@ -45,3 +46,14 @@ class Security:
         # 3. Otherwise, update self.highest_version and return True
 
         return True
+
+    def decrypt_firmware(self, message):
+        # TODO: Implement ChaCha20-Poly1305 decryption
+        # (The signature is checked before this is called.)
+        # 1. Extract the nonce and code (ciphertext) from message["firmware"] and convert them from hex to bytes
+        # 2. Load the shared key using load_firmware_key()
+        # 3. Use ChaCha20Poly1305(key).decrypt() with the version as associated data: str(version).encode()
+        # 4. Return the decrypted code as a string with decode()
+        # 5. Catch InvalidTag and return None
+
+        return message["firmware"]["code"]

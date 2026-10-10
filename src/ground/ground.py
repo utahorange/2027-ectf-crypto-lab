@@ -1,7 +1,10 @@
 import hashlib
+import os
 import socket
 
-from common.protocol import encode_message, load_private_key
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+from common.protocol import encode_message, load_firmware_key, load_private_key
 
 UAV_ADDRESS = ("127.0.0.1", 9000)
 
@@ -62,6 +65,40 @@ def update_firmware_signed(version, code):
         ) from None
 
     message = update_message(version, code)
+    message["signature"] = private_key.sign(encode_message(message)).hex()
+
+    send(message)
+    print(f"[GROUND] Sent: {message}")
+
+    return message
+
+
+def update_firmware_encrypted(version, code):
+    # Part 4: "code" is encrypted with ChaCha20-Poly1305 under the shared
+    # firmware key, with the version as associated data. The whole message
+    # is then signed, exactly like update_firmware_signed().
+    try:
+        firmware_key = load_firmware_key()
+        private_key = load_private_key()
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            "Missing keys. Run `uv run python generate_keys.py` "
+            "from the src folder first."
+        ) from None
+
+    nonce = os.urandom(12)
+    ciphertext = ChaCha20Poly1305(firmware_key).encrypt(
+        nonce, code.encode(), str(version).encode()
+    )
+
+    message = {
+        "type": "UPDATE",
+        "firmware": {
+            "version": version,
+            "nonce": nonce.hex(),
+            "code": ciphertext.hex(),
+        },
+    }
     message["signature"] = private_key.sign(encode_message(message)).hex()
 
     send(message)

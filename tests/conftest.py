@@ -1,8 +1,10 @@
 import hashlib
+import os
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from common.protocol import encode_message
 from uav.uav import UAV
@@ -29,6 +31,27 @@ def with_signature(message, private_key):
     # message (before "signature" is added), hex-encoded.
     signature = private_key.sign(encode_message(message))
     return {**message, "signature": signature.hex()}
+
+
+def encrypted_update_message(version, code, firmware_key, associated_version=None):
+    # Part 4: "code" is ChaCha20-Poly1305 ciphertext, with the version as
+    # associated data. associated_version lets a test bind it to a different
+    # version than the one in the message.
+    if associated_version is None:
+        associated_version = version
+
+    nonce = os.urandom(12)
+    ciphertext = ChaCha20Poly1305(firmware_key).encrypt(
+        nonce, code.encode(), str(associated_version).encode()
+    )
+    return {
+        "type": "UPDATE",
+        "firmware": {
+            "version": version,
+            "nonce": nonce.hex(),
+            "code": ciphertext.hex(),
+        },
+    }
 
 
 # ---------- Delivering messages ----------
@@ -89,3 +112,16 @@ def uav_part2(ground_key):
 @pytest.fixture
 def uav_part3(ground_key):
     return UAV(part=3)
+
+
+@pytest.fixture
+def firmware_key(ground_key, tmp_path):
+    """A fresh shared firmware key, next to the ground key pair."""
+    key = ChaCha20Poly1305.generate_key()
+    (tmp_path / "firmware.key").write_text(key.hex())
+    return key
+
+
+@pytest.fixture
+def uav_part4(ground_key, firmware_key):
+    return UAV(part=4)

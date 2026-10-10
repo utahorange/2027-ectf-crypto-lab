@@ -2,16 +2,18 @@
 #   - send any message to the UAV (it's on the same network)
 #   - see every message the ground server sends (Part 2b: Wireshark)
 # The attacker can NOT:
-#   - read keys/ground_private.pem
+#   - read keys/ground_private.pem or keys/firmware.key
 #
 # The helpers below match the ground server's, so you can compare: same call,
 # different key, different result.
 
 import hashlib
 import json
+import os
 import socket
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from common.protocol import encode_message
 
@@ -85,5 +87,33 @@ def replay(captured):
 
     send(message)
     print(f"[ATTACKER] Replayed: {message}")
+
+    return message
+
+
+def update_firmware_encrypted(version, code):
+    # Part 4: the attacker has neither the firmware key nor the ground
+    # private key, so it uses brand-new ones of its own. The UAV rejects
+    # this at the signature check, and couldn't decrypt it anyway.
+    firmware_key = ChaCha20Poly1305.generate_key()
+    private_key = Ed25519PrivateKey.generate()
+
+    nonce = os.urandom(12)
+    ciphertext = ChaCha20Poly1305(firmware_key).encrypt(
+        nonce, code.encode(), str(version).encode()
+    )
+
+    message = {
+        "type": "UPDATE",
+        "firmware": {
+            "version": version,
+            "nonce": nonce.hex(),
+            "code": ciphertext.hex(),
+        },
+    }
+    message["signature"] = private_key.sign(encode_message(message)).hex()
+
+    send(message)
+    print(f"[ATTACKER] Sent: {message}")
 
     return message

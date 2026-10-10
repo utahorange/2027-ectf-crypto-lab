@@ -28,3 +28,7 @@ def load_private_key():
             f.read(),
             password=None,
         )
+
+def load_firmware_key() -> bytes:
+    # Part 4: shared ChaCha20-Poly1305 key, stored as hex text.
+    return bytes.fromhex((keys_dir() / "firmware.key").read_text().strip())
